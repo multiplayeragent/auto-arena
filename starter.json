@@ -1,0 +1,21 @@
+{
+  "name": "Auto Arena",
+  "genre": "strategy",
+  "dim": "2D",
+  "mode": "Versus",
+  "players": "2–8",
+  "hook": "Buy units, place them, watch them fight.",
+  "how": "Between rounds, spend gold on units and drag them onto your board. Then they fight another player's army on their own. Lose and you lose health; three of a kind merge into a stronger unit. Last one standing wins.",
+  "controls": "Tap a shop card to buy, drag units to place them, drag a unit onto the shop to sell",
+  "uses": [
+    ["Host-run rounds", "The host's browser runs the shop timer, pairs everyone up and works out every fight; if it leaves, the next player takes over."],
+    ["Live sync", "Every screen replays the same fight from the same boards and seed, so everyone sees the same battle."],
+    ["Bots", "Bots take the empty seats and shop for themselves, and a friend who joins takes over a bot's army."],
+    ["Leaderboard", "Most games won, shown on the results card."]
+  ],
+  "ideas": [
+    "Add a unit that summons small skeletons",
+    "Give units teams like Fire and Ice with a bonus for three of a team",
+    "Make it a space battle with ships instead of units"
+  ]
+}

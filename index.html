@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Auto Arena</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #171a2b; }
+  body { font: 15px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; }
+  #top { position: fixed; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 20px)); pointer-events: none; }
+  #bar { display: flex; align-items: center; gap: 10px; padding: 5px 12px; border-radius: 999px; background: #0b0d18d0; font-weight: 800; white-space: nowrap; }
+  #phase { flex: 1; overflow: hidden; text-overflow: ellipsis; } #clock { font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+  .coin { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffe89a, #f0b429 60%, #b07a10); vertical-align: -2px; margin-right: 4px; }
+  .heart { color: #ff5d73; margin-right: 3px; }
+  #chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 6px; margin-top: 6px; font-size: 12px; font-weight: 700; }
+  #chips span { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 999px; background: #0b0d18b0; border-left: 4px solid var(--c); white-space: nowrap; }
+  #chips span.me { color: #ffe08a; } #chips span.out { opacity: .4; text-decoration: line-through; }
+  #chips i { display: inline-block; width: 32px; height: 5px; border-radius: 3px; background: #ffffff22; overflow: hidden; } #chips i b { display: block; height: 100%; background: var(--c); }
+  #msg { position: fixed; left: 0; width: 100vw; top: 38%; box-sizing: border-box; padding: 0 12px; text-align: center; font: 900 44px/1.1 system-ui, sans-serif; text-shadow: 0 4px 0 #0008; pointer-events: none; transition: opacity .3s; }
+  #msg small { display: block; font-size: 17px; font-weight: 800; margin-top: 6px; }
+  #net { position: fixed; bottom: max(4px, env(safe-area-inset-bottom)); left: 8px; font-size: 11px; opacity: .7; pointer-events: none; white-space: nowrap; text-shadow: 0 1px 2px #000; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #0009; }
+  #over[hidden] { display: none; }
+  .box { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 18px; background: #20243a; border: 1px solid #ffffff22; text-align: center; }
+  .box h2 { margin: 0 0 4px; font-size: 26px; } .box p { margin: 0 0 12px; opacity: .85; }
+  .box h3 { margin: 6px 0 4px; font-size: 13px; color: #ffd166; text-align: left; }
+  .box ol { text-align: left; margin: 0 0 12px; padding-left: 24px; font-size: 14px; min-height: 30px; } .box li span { float: right; }
+  .box button { width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffd166; color: #2a1d00; font: 800 16px system-ui, sans-serif; cursor: pointer; }
+  .box small { display: block; margin-top: 8px; opacity: .6; font-size: 12px; }
+  #safe { position: fixed; bottom: 0; height: 0; padding-bottom: env(safe-area-inset-bottom); visibility: hidden; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="top"><div id="bar"><span id="phase">Round 1</span><span id="clock"></span><span><span class="coin"></span><span id="gold">0</span></span><span><span class="heart">♥</span><span id="hp">20</span></span></div><div id="chips"></div></div>
+<div id="msg"></div>
+<div id="net">Connecting…</div>
+<div id="over" hidden><div class="box">
+  <h2 id="overTitle"></h2><p id="overSub"></p>
+  <h3>This game</h3><ol id="places"></ol>
+  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <button id="again">Play again</button><small id="next"></small>
+</div></div>
+<div id="safe"></div>
+<script>
+/* ═══ AUTO ARENA · a Multiplayer Agent starter ═══════════════════════════════════════════
+ * Buy units, place them, watch them fight. Last one standing wins. Versus, 2–8 players; bots take the empty seats.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ health, timers, gold, the shop, and the eight units
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   ARMIES ........ a board of 8 cells + a bench of 4; buying, selling, three-of-a-kind merges
+ *   BATTLE ........ the fight simulation: same boards + same seed = the same fight on every screen
+ *   GAME (HOST) ... rounds, pairings, damage, the bots' shopping, seats. Only the host writes shared fields.
+ *   MY ARMY ....... my gold, shop and units (they live in my own entity)
+ *   DRAW .......... the arena, units, effects, my bench and the shop
+ *   HUD & RESULTS . round, clock, gold, health, standings, results card, leaderboard
+ *   INPUT ......... tap a card to buy, drag units to place, drag onto the shop to sell
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - `game` (one JSON field: id, v, phase shop/fight/over, round, endsAt, startAt, seed, pairs,
+ *     seats with health, last round's results, winner) is written only by the HOST.
+ *   - Each player writes its OWN entity: `n`, `c`, `hb`, and `army` (gold, board, bench). Your shop
+ *     and your money are yours; the host only reads your board when the fight starts.
+ *   - When the shop timer ends (or everyone pressed Fight), the HOST copies every board into
+ *     `boards`, pairs everyone up, picks a seed and writes it all. Every client then replays its
+ *     own fight from the boards and the seed: the fight is computed, not streamed, so every
+ *     screen shows the same battle. The host works out the results the same way and writes them.
+ *   - Bots shop in the host's memory; their armies sit in `bots` so a new host (or a friend who
+ *     takes a bot's seat) carries them on. A player who leaves hands their army to a bot.
+ *   - Intents to the host: "ready" {g, r} (Fight now) and "again" {g} (Play again).
+ *   - ?attract plays offline, bots only, big armies (the preview video is recorded from it).
+ *   - Leaderboard "wins": +1 for each game a player wins, shown on the results card.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 4,            // fighters in a game; bots take the empty seats (2 to 8)
+  hp: 20,              // everyone's health at the start
+  shopMs: 25000,       // time to shop and place units between fights
+  fightDelayMs: 1500,  // "Fight!" shows this long before the units move
+  fightCapMs: 30000,   // a fight still going after this is a draw
+  afterFightMs: 2500,  // the result stays up this long, then the next shop opens
+  resultsMs: 15000,    // the final results card shows this long, then a new game starts
+  startGold: 6,        // gold for the first shop
+  income: 5,           // gold at every shop after that
+  winBonus: 1,         // extra gold after a won fight
+  rerollCost: 1,       // gold for a fresh shop
+  shopSize: 5,         // cards in the shop
+  boardBase: 2,        // units you may field = this + the round number (8 at most)
+  seatGraceMs: 8000,   // a player silent this long hands their army to a bot
+  board: "wins",       // leaderboard name
+  // The units. cost in gold; hp; atk = damage per hit; rate = hits per second; range and speed in
+  // cells; armor = share of damage ignored; splash = radius that also takes half damage; heal per cast.
+  units: {
+    brute:  { name: "Brute",  cost: 1, hp: 440,  atk: 42, rate: 0.85, range: 1.0, speed: 1.0, look: "#d98c5f", what: "Tough and cheap" },
+    archer: { name: "Archer", cost: 1, hp: 220,  atk: 36, rate: 0.95, range: 3.2, speed: 0.9, look: "#9fd36b", what: "Shoots from the back" },
+    imp:    { name: "Imp",    cost: 1, hp: 190,  atk: 22, rate: 2.2,  range: 1.0, speed: 1.7, look: "#ef6fae", what: "Fast, lots of small hits" },
+    knight: { name: "Knight", cost: 2, hp: 580,  atk: 52, rate: 0.8,  range: 1.0, speed: 1.0, armor: 0.3, look: "#c9d3e3", what: "Takes 30% less damage" },
+    mage:   { name: "Mage",   cost: 2, hp: 260,  atk: 52, rate: 0.6,  range: 3.0, speed: 0.9, splash: 1.1, look: "#8c7cf0", what: "Blasts a small area" },
+    healer: { name: "Healer", cost: 2, hp: 290,  atk: 18, rate: 0.8,  range: 3.0, speed: 0.9, heal: 50, look: "#f4e9c8", what: "Heals the most hurt friend" },
+    golem:  { name: "Golem",  cost: 3, hp: 1050, atk: 66, rate: 0.55, range: 1.1, speed: 0.7, splash: 0.9, look: "#8a8f9c", what: "Huge, smashes an area" },
+    dragon: { name: "Dragon", cost: 3, hp: 620,  atk: 70, rate: 0.7,  range: 2.8, speed: 1.1, splash: 0.9, look: "#ff7a45", what: "Breathes fire on a group" },
+  },
+};
+const KEYS = Object.keys(CONFIG.units);
+const STARS = [0, 1, 1.8, 3.2]; // stat multiplier at 1, 2 and 3 stars (three of a kind merge one star up)
+const TEAM = ["#4f8cff", "#ff5a5f"]; // in a fight: your side (bottom) and theirs (top)
+const COLORS = ["#4f8cff", "#ff5a5f", "#3ecf7a", "#ffc23d", "#b77bff", "#ff8a3d", "#2fd4d4", "#ff6fb5"];
+const BOT_NAMES = ["Rook", "Mira", "Tank", "Juno", "Pip", "Vex", "Ozzy", "Lark"];
+const NAME_A = ["Brave", "Clever", "Lucky", "Grand", "Sly", "Steady"], NAME_B = ["Tactician", "Captain", "Chief", "Warden", "Coach", "Boss"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'auto-arena',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A shared JSON field, parsed once per change (read-only: never mutate what this returns). */
+function shared(key, fallback) {
+  const raw = S.shared[key], m = memo.get(key);
+  if (m && m.raw === raw) return m.v;
+  const v = parse(raw, fallback);
+  memo.set(key, { raw, v });
+  return v;
+}
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+const stillHere = (id) => id === net.sessionId || (!!S.entities.players[id] && performance.now() - (seenHb.get(id)?.at ?? -1e9) < CONFIG.seatGraceMs);
+
+// ── ARMIES ──────────────────────────────────────────────────────────────────────────
+// An army is { g: gold, bd: 8 board cells, bn: 4 bench slots }; a unit is [key, stars].
+// Board cells 0–3 are the front row, 4–7 the back row.
+const emptyArmy = (g) => ({ g, bd: Array(8).fill(null), bn: Array(4).fill(null) });
+const boardCap = (round) => Math.min(8, CONFIG.boardBase + round);
+const onBoard = (a) => a.bd.filter(Boolean).length;
+const worth = (u) => CONFIG.units[u[0]].cost * 3 ** (u[1] - 1); // what a unit sells for
+const ranged = (k) => CONFIG.units[k].range > 1.5;
+function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+/** Five random cards; pricier units show up more in later rounds. */
+function rollShop(round) {
+  const w = round <= 1 ? [75, 25, 0] : round === 2 ? [60, 32, 8] : round < 5 ? [45, 38, 17] : [35, 40, 25];
+  return Array.from({ length: CONFIG.shopSize }, () => {
+    let r = Math.random() * 100, tier = r < w[0] ? 1 : r < w[0] + w[1] ? 2 : 3;
+    return pick(KEYS.filter((k) => CONFIG.units[k].cost === tier));
+  });
+}
+/** Three of the same unit at the same stars merge into one a star higher, where the first one stood. */
+function mergeAll(a) {
+  let merged = null;
+  for (let again = true; again;) {
+    again = false;
+    const spots = [];
+    a.bd.forEach((u, i) => u && spots.push({ w: "bd", i, k: u[0], st: u[1] }));
+    a.bn.forEach((u, i) => u && spots.push({ w: "bn", i, k: u[0], st: u[1] }));
+    for (const s of spots) {
+      const same = spots.filter((o) => o.k === s.k && o.st === s.st);
+      if (s.st >= 3 || same.length < 3) continue;
+      same.slice(0, 3).forEach((o) => { a[o.w][o.i] = null; });
+      a[same[0].w][same[0].i] = [s.k, s.st + 1];
+      merged = [s.k, s.st + 1]; again = true; break;
+    }
+  }
+  return merged;
+}
+/** Buy one unit: onto the board if there's room (melee in front, ranged behind), else the bench. */
+function buyUnit(a, k, round) {
+  const C = CONFIG.units[k];
+  if (a.g < C.cost) return "gold";
+  const rows = ranged(k) ? [4, 5, 6, 7, 0, 1, 2, 3] : [0, 1, 2, 3, 4, 5, 6, 7];
+  const cell = onBoard(a) < boardCap(round) ? rows.find((i) => !a.bd[i]) : undefined, slot = a.bn.findIndex((u) => !u);
+  const copies = [...a.bd.map((u, i) => ["bd", i, u]), ...a.bn.map((u, i) => ["bn", i, u])].filter(([, , u]) => u && u[0] === k && u[1] === 1);
+  let merged = null;
+  if (cell !== undefined) a.bd[cell] = [k, 1];
+  else if (slot >= 0) a.bn[slot] = [k, 1];
+  else if (copies.length >= 2) { a[copies[1][0]][copies[1][1]] = null; a[copies[0][0]][copies[0][1]] = merged = [k, 2]; } // no room, but it completes a three
+  else return "room";
+  a.g -= C.cost;
+  return mergeAll(a) || merged || "ok";
+}
+/** A board as the fight sees it: [[cell, key, stars], …], checked and trimmed to the round's limit. */
+function cleanBoard(bd, round) {
+  const out = [];
+  (Array.isArray(bd) ? bd : []).slice(0, 8).forEach((u, cell) => { if (Array.isArray(u) && CONFIG.units[u[0]] && u[1] >= 1 && u[1] <= 3) out.push([cell, u[0], Math.floor(u[1])]); });
+  return out.slice(0, boardCap(round));
+}
+
+// ── BATTLE ──────────────────────────────────────────────────────────────────────────
+// The arena is 4 cells wide and 6 tall. Side 0 stands in rows 4–5 (front row 4), side 1 in rows 0–1,
+// turned around. Only + - * / and sqrt, and a seeded random, so every browser gets the same fight.
+const TICK = 0.05;
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function makeBattle(boardA, boardB, seed) {
+  const units = [];
+  [boardA, boardB].forEach((bd, side) => {
+    for (const [cell, k, st] of (bd || []).slice().sort((p, q) => p[0] - q[0])) {
+      const C = CONFIG.units[k], col = cell % 4, row = Math.floor(cell / 4);
+      const x = side === 0 ? col + 0.5 : 3.5 - col, y = side === 0 ? 4.5 + row : 1.5 - row;
+      units.push({ id: units.length, k, st, side, x, y, px: x, py: y, hp: C.hp * STARS[st], max: C.hp * STARS[st], atk: C.atk * STARS[st], cd: 0.4 + (units.length % 4) * 0.12, tgt: -1, hitAt: -9, hurtAt: -9 });
+    }
+  });
+  return { units, t: 0, rnd: mulberry32(seed), done: false, winner: -1, events: [] };
+}
+function nearest(B, u, side) {
+  let best = -1, bd = 1e9;
+  for (const o of B.units) { if (o.side !== side || o.hp <= 0 || o === u) continue; const d = (o.x - u.x) ** 2 + (o.y - u.y) ** 2; if (d < bd) { bd = d; best = o.id; } }
+  return best;
+}
+function hurt(B, t, dmg) {
+  t.hp -= dmg * (1 - (CONFIG.units[t.k].armor || 0)); t.hurtAt = B.t;
+  if (t.hp <= 0) B.events.push({ k: "die", b: t.id });
+}
+/** One 50ms step: every unit picks the nearest enemy, walks into range, and hits (or heals). */
+function stepBattle(B) {
+  if (B.done) return;
+  B.t += TICK;
+  for (const u of B.units) { u.px = u.x; u.py = u.y; }
+  for (const u of B.units) {
+    if (u.hp <= 0) continue;
+    const C = CONFIG.units[u.k];
+    u.cd -= TICK;
+    if (C.heal && u.cd <= 0) { // a healer mends the most hurt friend in range before it fights
+      let best = null;
+      for (const o of B.units) if (o.side === u.side && o.hp > 0 && o.hp < o.max * 0.85 && (o.x - u.x) ** 2 + (o.y - u.y) ** 2 <= C.range * C.range && (!best || o.hp / o.max < best.hp / best.max)) best = o;
+      if (best) { best.hp = Math.min(best.max, best.hp + C.heal * STARS[u.st]); u.cd = 1 / C.rate; u.hitAt = B.t; B.events.push({ k: "heal", a: u.id, b: best.id }); continue; }
+    }
+    let t = B.units[u.tgt];
+    if (!t || t.hp <= 0) { u.tgt = nearest(B, u, 1 - u.side); t = B.units[u.tgt]; }
+    if (!t) continue;
+    const dx = t.x - u.x, dy = t.y - u.y, d = Math.sqrt(dx * dx + dy * dy);
+    if (d > C.range) { const s = Math.min(d - C.range + 0.01, C.speed * TICK); u.x += (dx / d) * s; u.y += (dy / d) * s; }
+    else if (u.cd <= 0) {
+      u.cd = 1 / C.rate; u.hitAt = B.t;
+      const crit = B.rnd() < 0.12, dmg = u.atk * (0.9 + B.rnd() * 0.2) * (crit ? 1.6 : 1);
+      B.events.push({ k: ranged(u.k) ? "shot" : "hit", a: u.id, b: t.id, crit, splash: !!C.splash, n: Math.round(dmg * (1 - (CONFIG.units[t.k].armor || 0))) });
+      hurt(B, t, dmg);
+      if (C.splash) for (const o of B.units) if (o !== t && o.side === t.side && o.hp > 0 && (o.x - t.x) ** 2 + (o.y - t.y) ** 2 < C.splash * C.splash) hurt(B, o, dmg * 0.5);
+    }
+  }
+  for (const a of B.units) for (const b of B.units) { // units push each other apart
+    if (a.id >= b.id || a.hp <= 0 || b.hp <= 0) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy);
+    if (d >= 0.72) continue;
+    const push = (0.72 - d) / 2, nx = d > 1e-6 ? dx / d : 1, ny = d > 1e-6 ? dy / d : 0;
+    a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push;
+  }
+  for (const u of B.units) { u.x = Math.max(0.3, Math.min(3.7, u.x)); u.y = Math.max(0.3, Math.min(5.7, u.y)); }
+  const alive = [0, 1].map((s) => B.units.some((u) => u.side === s && u.hp > 0));
+  if (!alive[0] || !alive[1]) { B.done = true; B.winner = alive[0] ? 0 : alive[1] ? 1 : -1; }
+  else if (B.t >= CONFIG.fightCapMs / 1000) { B.done = true; B.winner = -1; }
+}
+/** Run a fight to the end: who won, how hard (stars left standing), how long it took. */
+function outcome(boardA, boardB, seed) {
+  const B = makeBattle(boardA, boardB, seed);
+  while (!B.done) { stepBattle(B); B.events.length = 0; }
+  const stars = B.units.filter((u) => u.hp > 0 && u.side === B.winner).reduce((n, u) => n + u.st, 0);
+  return { winner: B.winner, stars, secs: B.t };
+}
+const damageFor = (round, stars) => round + stars; // a lost fight costs the round number + the winners' stars left standing
+const pairSeed = (g, i) => (g.seed + i * 7919) | 0;
+
+// ── GAME (HOST) ─────────────────────────────────────────────────────────────────────
+const host = { last: null, bots: {}, ready: new Set(), again: new Set(), outcomes: null, wasHost: false, armies: new Map() };
+/** The game as state has it, or the host's own newer write that hasn't come back yet. */
+function game() {
+  const g = shared("game", null);
+  return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g;
+}
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+function writeBots(id) { net.setShared("bots", JSON.stringify({ g: id, b: host.bots })); }
+const colorOf = (id) => (id === net.sessionId ? myColor : S.entities.players[id]?.c || COLORS[0]);
+const nameOf = (id) => (id === net.sessionId ? myName : S.entities.players[id]?.n || "Player");
+/** A new game: the live players first, bots up to CONFIG.seats, everyone at full health. */
+function newGame(id) {
+  const humans = ATTRACT ? [] : livePlayers().slice(0, 8), seats = [], used = new Set();
+  for (const h of humans) { let c = colorOf(h); if (used.has(c)) c = COLORS.find((x) => !used.has(x)); used.add(c); seats.push({ i: h, n: nameOf(h), c, b: 0, hp: CONFIG.hp, out: 0 }); }
+  for (let k = 0; seats.length < Math.max(2, Math.min(8, Math.max(CONFIG.seats, humans.length))); k++) {
+    const c = COLORS.find((x) => !used.has(x)); used.add(c);
+    seats.push({ i: "bot" + k, n: BOT_NAMES[k], c, b: 1, hp: CONFIG.hp, out: 0 });
+  }
+  host.bots = {}; host.ready.clear(); host.again.clear(); host.outcomes = null;
+  seats.forEach((s, k) => { if (s.b) { host.bots[k] = emptyArmy(CONFIG.startGold); botShop(host.bots[k], 1); } });
+  writeBots(id);
+  return writeGame({ id, phase: "shop", round: 1, endsAt: Date.now() + CONFIG.shopMs, startAt: 0, seed: 0, pairs: [], seats, res: [], winner: -1 });
+}
+/** A bot's shopping: buy what merges or hits hardest, reroll while rich, then line up the best units. */
+function botShop(a, round) {
+  for (let rolls = 0; rolls < 4; rolls++) {
+    const offers = rollShop(round).map((k) => ({ k, score: [...a.bd, ...a.bn].filter((u) => u && u[0] === k).length * 3 + CONFIG.units[k].cost + Math.random() * 2 })).sort((p, q) => q.score - p.score);
+    for (const o of offers) if (a.g >= CONFIG.units[o.k].cost) buyUnit(a, o.k, 99);
+    if (a.g < 4) break;
+    a.g -= CONFIG.rerollCost;
+  }
+  const all = [...a.bd, ...a.bn].filter(Boolean).sort((p, q) => worth(q) - worth(p) + (Math.random() - 0.5));
+  const field = all.slice(0, boardCap(round)), rest = all.slice(boardCap(round));
+  a.bd = Array(8).fill(null);
+  for (const u of field) { const rows = ranged(u[0]) ? [4, 5, 6, 7, 0, 1, 2, 3] : [1, 2, 0, 3, 5, 6, 4, 7]; a.bd[rows.find((i) => !a.bd[i])] = u; }
+  a.bn = Array(4).fill(null); rest.slice(0, 4).forEach((u, i) => { a.bn[i] = u; });
+  for (const u of rest.slice(4)) a.g += worth(u);
+}
+/** Shopping is over: copy every board, pair everyone up, pick a seed. */
+function startFight(g) {
+  const alive = g.seats.map((s, k) => k).filter((k) => !g.seats[k].out), boards = g.seats.map((s, k) => {
+    if (s.out) return [];
+    if (s.b) return cleanBoard(host.bots[k]?.bd, g.round);
+    const a = s.i === net.sessionId ? mine : armyOf(s.i);
+    return a && a.gid === g.id && a.s === k ? cleanBoard(a.bd, g.round) : [];
+  });
+  for (let i = alive.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [alive[i], alive[j]] = [alive[j], alive[i]]; }
+  const pairs = [];
+  for (let i = 0; i + 1 < alive.length; i += 2) pairs.push([alive[i], alive[i + 1], 0]);
+  if (alive.length % 2) { const k = alive[alive.length - 1], other = alive.length > 1 ? alive[Math.floor(Math.random() * (alive.length - 1))] : k; pairs.push([k, other, 1]); } // odd one out fights a ghost copy
+  net.setShared("boards", JSON.stringify({ g: g.id, r: g.round, b: boards }));
+  const seed = Math.floor(Math.random() * 1e9), next = { ...g, phase: "fight", seed, pairs, startAt: Date.now() + CONFIG.fightDelayMs };
+  host.outcomes = { key: g.id + ":" + g.round, list: pairs.map((p, i) => outcome(boards[p[0]], boards[p[1]], pairSeed(next, i))) };
+  host.ready.clear();
+  const longest = Math.max(1, ...host.outcomes.list.map((o) => o.secs));
+  return writeGame({ ...next, endsAt: next.startAt + longest * 1000 + CONFIG.afterFightMs });
+}
+/** Every fight is over: losers lose health, the knocked out get their place, the next shop opens. */
+function endFight(g) {
+  const key = g.id + ":" + g.round, boards = shared("boards", null);
+  if (!host.outcomes || host.outcomes.key !== key) { // a new host works the fights out again from the same boards and seed
+    if (!boards || boards.g !== g.id || boards.r !== g.round) return writeGame({ ...g, phase: "shop", round: g.round + 1, endsAt: Date.now() + CONFIG.shopMs, res: [] });
+    host.outcomes = { key, list: g.pairs.map((p, i) => outcome(boards.b[p[0]], boards.b[p[1]], pairSeed(g, i))) };
+  }
+  const seats = g.seats.map((s) => ({ ...s })), res = [];
+  g.pairs.forEach(([a, b, ghost], i) => {
+    const o = host.outcomes.list[i], dmg = damageFor(g.round, o.stars), draw = Math.ceil(g.round / 2);
+    res.push({ s: a, won: o.winner === 0 ? 1 : o.winner === 1 ? 0 : -1, dmg: o.winner === 1 ? dmg : o.winner === -1 ? draw : 0, vs: b, ghost });
+    if (!ghost) res.push({ s: b, won: o.winner === 1 ? 1 : o.winner === 0 ? 0 : -1, dmg: o.winner === 0 ? dmg : o.winner === -1 ? draw : 0, vs: a, ghost: 0 });
+  });
+  for (const r of res) seats[r.s].hp -= r.dmg;
+  const fallen = seats.map((s, k) => k).filter((k) => !seats[k].out && seats[k].hp <= 0), standing = seats.filter((s) => !s.out && s.hp > 0).length;
+  fallen.sort((p, q) => seats[q].hp - seats[p].hp).forEach((k, n) => { seats[k].out = standing + 1 + n; });
+  const left = seats.map((s, k) => k).filter((k) => !seats[k].out), people = seats.some((s) => !s.b), peopleIn = seats.some((s) => !s.b && !s.out);
+  if (left.length <= 1 || (people && !peopleIn && !ATTRACT)) {
+    let winner;
+    if (left.length) { left.sort((p, q) => seats[q].hp - seats[p].hp); winner = left[0]; left.forEach((k, n) => { seats[k].out = n + 1; }); }
+    else winner = fallen.length > 1 && seats[fallen[1]].hp === seats[fallen[0]].hp ? -2 : fallen[0]; // the last ones fell together: the healthiest wins, a tie is a draw
+    return writeGame({ ...g, phase: "over", seats, res, winner, endsAt: Date.now() + CONFIG.resultsMs });
+  }
+  const round = g.round + 1;
+  seats.forEach((s, k) => { // bots get paid and shop for the new round
+    if (!s.b || s.out) return;
+    const a = host.bots[k] || (host.bots[k] = emptyArmy(0)), won = res.some((r) => r.s === k && r.won === 1);
+    a.g += CONFIG.income + (won ? CONFIG.winBonus : 0); botShop(a, round);
+  });
+  writeBots(g.id);
+  return writeGame({ ...g, phase: "shop", round, seats, res, endsAt: Date.now() + CONFIG.shopMs });
+}
+/** Gone players hand their army to a bot; a waiting player takes over a bot still in the game. */
+function fixSeats(g) {
+  if (ATTRACT || g.phase === "over") return g;
+  const seats = g.seats.map((s) => ({ ...s })), waiting = livePlayers().filter((id) => !seats.some((s) => s.i === id));
+  let changed = false;
+  seats.forEach((s, k) => {
+    if (!s.b && !stillHere(s.i)) {
+      const a = armyOf(s.i), last = shared("boards", null);
+      host.bots[k] = a && a.gid === g.id ? { g: a.gold, bd: a.bd.slice(), bn: a.bn.slice() } : { ...emptyArmy(0), bd: (last && last.g === g.id ? last.b[k] : []).reduce((bd, [cell, kk, st]) => { bd[cell] = [kk, st]; return bd; }, Array(8).fill(null)) };
+      Object.assign(s, { i: `bot-${g.id}-${k}`, n: BOT_NAMES.find((b) => !seats.some((x) => x.n === b)) || "Bot", b: 1 }); changed = true;
+    } else if (s.b && !s.out && waiting.length) { const id = waiting.shift(); Object.assign(s, { i: id, n: nameOf(id), b: 0 }); changed = true; }
+    else if (!s.b && S.entities.players[s.i]?.n && s.n !== nameOf(s.i)) { s.n = nameOf(s.i); changed = true; } // their name arrived after they sat down
+  });
+  if (!changed) return g;
+  writeBots(g.id);
+  return writeGame({ ...g, seats });
+}
+/** Everyone still here and still in the game pressed the button. */
+function allPressed(g, set) {
+  const people = g.seats.filter((s) => !s.b && (g.phase === "over" || !s.out) && stillHere(s.i)).map((s) => s.i);
+  return people.length > 0 && people.every((id) => set.has(id));
+}
+function hostTick() {
+  let g = game();
+  const t = Date.now();
+  if (!host.wasHost) { host.wasHost = true; const b = shared("bots", null); host.bots = g && b && b.g === g.id ? JSON.parse(JSON.stringify(b.b)) : {}; host.outcomes = null; } // a new host carries on
+  if (!g) g = newGame(1);
+  g = fixSeats(g);
+  if (g.phase === "shop" && (t > g.endsAt || allPressed(g, host.ready))) startFight(g);
+  else if (g.phase === "fight" && t > g.endsAt) endFight(g);
+  else if (g.phase === "over" && (t > g.endsAt || allPressed(g, host.again))) newGame(g.id + 1);
+}
+
+// ── MY ARMY ─────────────────────────────────────────────────────────────────────────
+// My gold, board and bench live in my own entity (`army`), so the host can copy my board when the
+// fight starts. My shop is mine alone and never leaves this tab.
+const mine = { gid: -1, s: -1, r: 0, gold: 0, bd: Array(8).fill(null), bn: Array(4).fill(null), shop: [] };
+const armyMemo = new Map();
+/** Anyone's last published army (cached, so the host can hand a leaver's army to a bot). */
+function armyOf(id) {
+  const raw = S.entities.players[id]?.army, m = armyMemo.get(id);
+  if (raw !== undefined && (!m || m.raw !== raw)) { const a = parse(raw, null); if (a && Array.isArray(a.bd)) armyMemo.set(id, { raw, a }); }
+  return armyMemo.get(id)?.a || null;
+}
+const mySeat = (g) => (g ? g.seats.findIndex((s) => s.i === net.sessionId) : -1);
+function publishMine() { net.me.set("army", JSON.stringify({ gid: mine.gid, s: mine.s, r: mine.r, gold: mine.gold, bd: mine.bd, bn: mine.bn })); }
+/** Keep my army in step with the game: a new seat, a new round's pay and a fresh shop. */
+function syncMine(g) {
+  const seat = mySeat(g);
+  if (seat < 0) return;
+  if (mine.gid !== g.id || mine.s !== seat) { // just sat down: carry on the bot's army if this seat had one
+    const b = shared("bots", null), from = b && b.g === g.id ? b.b[seat] : null;
+    Object.assign(mine, { gid: g.id, s: seat, r: g.round, gold: from ? from.g : CONFIG.startGold, bd: from ? from.bd.slice() : Array(8).fill(null), bn: from ? from.bn.slice() : Array(4).fill(null), shop: rollShop(g.round) });
+    publishMine();
+  }
+  if (g.phase === "shop" && mine.r < g.round) {
+    const won = (g.res || []).some((r) => r.s === seat && r.won === 1);
+    mine.gold += CONFIG.income + (won ? CONFIG.winBonus : 0); mine.r = g.round; mine.shop = rollShop(g.round); pressed = false;
+    publishMine();
+  }
+}
+const canShop = (g) => g && g.phase === "shop" && mySeat(g) >= 0 && !g.seats[mySeat(g)].out && !ATTRACT;
+function buy(i) {
+  const g = game(), k = mine.shop[i];
+  if (!canShop(g) || !k) return;
+  const a = { g: mine.gold, bd: mine.bd, bn: mine.bn }, r = buyUnit(a, k, g.round);
+  if (r === "gold") return toast("Not enough gold"), sound(140, 0.12);
+  if (r === "room") return toast("No room: sell a unit first"), sound(140, 0.12);
+  Object.assign(mine, { gold: a.g, bd: a.bd, bn: a.bn }); mine.shop[i] = null;
+  if (Array.isArray(r)) { toast(`${CONFIG.units[r[0]].name} ${"★".repeat(r[1])}!`); sound(880, 0.25, 0.25); } else sound(520, 0.08);
+  hintOff = true; publishMine();
+}
+function reroll() {
+  const g = game();
+  if (!canShop(g) || mine.gold < CONFIG.rerollCost) return;
+  mine.gold -= CONFIG.rerollCost; mine.shop = rollShop(g.round); sound(400, 0.08); publishMine();
+}
+function sell(where, i) {
+  const u = mine[where][i];
+  if (!u || !canShop(game())) return;
+  mine[where][i] = null; mine.gold += worth(u); toast(`Sold for ${worth(u)} gold`); sound(300, 0.1); publishMine();
+}
+/** Move a unit between board cells and bench slots (swapping with whatever is there). */
+function moveUnit(from, to) {
+  const g = game();
+  if (!canShop(g) || (from.w === to.w && from.i === to.i)) return;
+  const a = mine[from.w][from.i], b = mine[to.w][to.i];
+  if (to.w === "bd" && from.w === "bn" && !b && onBoard(mine) >= boardCap(g.round)) return toast(`Only ${boardCap(g.round)} units this round`);
+  mine[to.w][to.i] = a; mine[from.w][from.i] = b; sound(600, 0.05); publishMine();
+}
+let pressed = false;
+function fightNow() {
+  const g = game();
+  if (!canShop(g) || pressed) return;
+  pressed = true;
+  if (isHost()) host.ready.add(net.sessionId); else net.send("ready", { g: g.id, r: g.round });
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, CELL = 60, AX = 0, AY = 0, viewKey = "", UI = { bench: [], shop: [], reroll: null, fight: null, panel: null };
+/** Portrait: arena on top, bench + shop below. Landscape: arena left, bench + shop on the right. */
+function layout() {
+  const key = innerWidth + "x" + innerHeight;
+  if (key === viewKey) return;
+  viewKey = key;
+  DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR;
+  const safe = document.getElementById("safe").offsetHeight, top = ATTRACT ? 12 : W < 560 ? 92 : 80;
+  ROT = ATTRACT; // the preview lays the arena on its side to fill a wide frame
+  if (ATTRACT) { CELL = Math.min((W - 30) / 6, (H - 20) / 4); AX = (W - 6 * CELL) / 2; AY = (H - 4 * CELL) / 2; UI = { bench: [], shop: [] }; return; }
+  const land = W > H * 1.15, pw = land ? Math.min(430, W * 0.46) : W - 20;
+  const slot = Math.min(66, (pw - 3 * 8) / 4), cw = Math.min(84, (pw - 4 * 6) / 5), ch = cw * 1.32, bh = 46;
+  const panelH = slot + 22 + ch + 10 + bh;
+  let px, py;
+  if (land) {
+    CELL = Math.min((W - pw - 48) / 4, (H - top - 16) / 6);
+    AX = Math.max(12, (W - 4 * CELL - 32 - pw) / 2); AY = top + (H - top - 8 - 6 * CELL) / 2; // arena and panel side by side, centered
+    px = Math.min(W - pw - 12, AX + 4 * CELL + 32); py = Math.max(top, (H - panelH) / 2);
+  } else {
+    CELL = Math.min((W - 20) / 4, (H - top - panelH - 36 - safe) / 6);
+    AX = (W - 4 * CELL) / 2; AY = top + 2;
+    px = 10; py = H - panelH - 22 - safe; // room under the panel for the connection line
+  }
+  const bw = slot * 4 + 24, sw = cw * 5 + 24, msgEl = document.getElementById("msg");
+  Object.assign(msgEl.style, { left: AX + "px", width: CELL * 4 + "px", top: AY + CELL * 2.4 + "px" }); // messages sit over the arena
+  UI = {
+    bench: [0, 1, 2, 3].map((i) => ({ x: px + (pw - bw) / 2 + i * (slot + 8), y: py + 16, w: slot, h: slot })),
+    shop: [0, 1, 2, 3, 4].map((i) => ({ x: px + (pw - sw) / 2 + i * (cw + 6), y: py + slot + 22, w: cw, h: ch })),
+    reroll: { x: px + (pw - sw) / 2, y: py + slot + 32 + ch, w: (sw - 8) / 2, h: bh },
+    fight: { x: px + (pw - sw) / 2 + (sw + 8) / 2, y: py + slot + 32 + ch, w: (sw - 8) / 2, h: bh },
+    panel: { x: px, y: py, w: pw, h: panelH },
+  };
+}
+addEventListener("resize", () => { viewKey = ""; }); addEventListener("orientationchange", () => { viewKey = ""; });
+let flip = false, ROT = false; // flip: turned around so my side is always at the bottom. ROT: on its side, my side on the left
+/** Arena cells (x 0..4, y 0..6) to screen pixels. */
+const viewToScreen = (x, y) => (ROT ? [AX + (6 - y) * CELL, AY + x * CELL] : [AX + x * CELL, AY + y * CELL]);
+const toScreen = (x, y) => (flip ? viewToScreen(4 - x, 6 - y) : viewToScreen(x, y));
+const inside = (r, x, y) => r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+/** The arena floor: two home rows each side, sand in the middle. */
+function drawArena(g, now) {
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 4; x++) {
+    const [X1, Y1] = viewToScreen(x, y), [X2, Y2] = viewToScreen(x + 1, y + 1), home = y >= 4, theirs = y <= 1;
+    ctx.fillStyle = home ? ((x + y) % 2 ? "#2d3b5c" : "#33436a") : theirs ? ((x + y) % 2 ? "#4a2f3c" : "#543542") : (x + y) % 2 ? "#3d3a35" : "#45413a";
+    ctx.fillRect(Math.min(X1, X2), Math.min(Y1, Y2), CELL + 0.5, CELL + 0.5);
+  }
+  const [L, T] = viewToScreen(ROT ? 4 : 0, 0), [R, Bm] = viewToScreen(ROT ? 0 : 4, 6), [m1x, m1y] = viewToScreen(0, 3), [m2x, m2y] = viewToScreen(4, 3);
+  ctx.strokeStyle = "#ffffff18"; ctx.lineWidth = 1; ctx.strokeRect(Math.min(L, R), Math.min(T, Bm), Math.abs(R - L), Math.abs(Bm - T));
+  ctx.strokeStyle = "#ffffff14"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(m1x, m1y); ctx.lineTo(m2x, m2y); ctx.stroke();
+}
+/** One unit, drawn from shapes: its body in its own color, a ring in its team's color, star pips under it. */
+function drawUnit(k, st, X, Y, r, team, alpha = 1, flash = 0, now = 0) {
+  const C = CONFIG.units[k], bob = Math.sin(now / 220 + X * 0.05) * r * 0.05;
+  ctx.globalAlpha = alpha * 0.35; ctx.fillStyle = "#000"; ctx.beginPath(); ctx.ellipse(X, Y + r * 0.78, r * 0.85, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = alpha; Y += bob;
+  ctx.fillStyle = team; ctx.beginPath(); ctx.arc(X, Y, r * 0.98, 0, Math.PI * 2); ctx.fill();
+  const body = flash > 0 ? "#ffffff" : C.look, dark = "#1c1d29";
+  ctx.fillStyle = body;
+  if (k === "brute") { rr(X - r * 0.7, Y - r * 0.68, r * 1.4, r * 1.36, r * 0.3); ctx.fill(); }
+  else if (k === "archer") { ctx.beginPath(); ctx.moveTo(X, Y - r * 0.85); ctx.lineTo(X + r * 0.75, Y + r * 0.6); ctx.lineTo(X - r * 0.75, Y + r * 0.6); ctx.closePath(); ctx.fill(); ctx.strokeStyle = "#7a4a1d"; ctx.lineWidth = r * 0.12; ctx.beginPath(); ctx.arc(X + r * 0.55, Y, r * 0.55, -1.2, 1.2); ctx.stroke(); }
+  else if (k === "imp") { ctx.beginPath(); ctx.arc(X, Y + r * 0.08, r * 0.6, 0, Math.PI * 2); ctx.fill(); for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(X + s * r * 0.25, Y - r * 0.4); ctx.lineTo(X + s * r * 0.55, Y - r * 0.9); ctx.lineTo(X + s * r * 0.55, Y - r * 0.3); ctx.fill(); } }
+  else if (k === "knight") { ctx.beginPath(); ctx.moveTo(X - r * 0.68, Y - r * 0.65); ctx.lineTo(X + r * 0.68, Y - r * 0.65); ctx.lineTo(X + r * 0.68, Y + r * 0.1); ctx.lineTo(X, Y + r * 0.78); ctx.lineTo(X - r * 0.68, Y + r * 0.1); ctx.closePath(); ctx.fill(); }
+  else if (k === "mage") { ctx.beginPath(); ctx.arc(X, Y + r * 0.15, r * 0.6, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = flash > 0 ? "#fff" : "#4b3fb0"; ctx.beginPath(); ctx.moveTo(X - r * 0.62, Y - r * 0.2); ctx.lineTo(X + r * 0.62, Y - r * 0.2); ctx.lineTo(X + r * 0.1, Y - r * 1.05); ctx.closePath(); ctx.fill(); }
+  else if (k === "healer") { ctx.beginPath(); ctx.arc(X, Y, r * 0.72, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#3ecf7a"; ctx.fillRect(X - r * 0.12, Y - r * 0.45, r * 0.24, r * 0.5); ctx.fillRect(X - r * 0.32, Y - r * 0.32, r * 0.64, r * 0.24); }
+  else if (k === "golem") { ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2 + Math.PI / 6; ctx.lineTo(X + Math.cos(a) * r * 0.85, Y + Math.sin(a) * r * 0.85); } ctx.closePath(); ctx.fill(); ctx.fillStyle = "#6b707c"; ctx.fillRect(X - r * 0.45, Y + r * 0.1, r * 0.25, r * 0.2); ctx.fillRect(X + r * 0.15, Y + r * 0.25, r * 0.28, r * 0.18); }
+  else if (k === "dragon") { const f = Math.sin(now / 90) * r * 0.2; for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(X + s * r * 0.3, Y - r * 0.1); ctx.lineTo(X + s * r * 1.15, Y - r * 0.75 + f); ctx.lineTo(X + s * r * 0.8, Y + r * 0.3); ctx.fill(); } ctx.beginPath(); ctx.arc(X, Y, r * 0.58, 0, Math.PI * 2); ctx.fill(); }
+  // eyes
+  const eyeY = k === "mage" || k === "imp" ? Y + r * 0.08 : k === "archer" ? Y + r * 0.1 : Y - r * 0.12, glow = k === "golem";
+  ctx.fillStyle = glow ? "#7ff7ff" : dark;
+  if (k === "knight") ctx.fillRect(X - r * 0.42, eyeY - r * 0.06, r * 0.84, r * 0.14);
+  else for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(X + s * r * 0.22, eyeY, Math.max(1.2, r * 0.1), 0, Math.PI * 2); ctx.fill(); }
+  if (k === "brute") { ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, r * 0.08); ctx.beginPath(); ctx.moveTo(X - r * 0.4, eyeY - r * 0.25); ctx.lineTo(X - r * 0.1, eyeY - r * 0.15); ctx.moveTo(X + r * 0.4, eyeY - r * 0.25); ctx.lineTo(X + r * 0.1, eyeY - r * 0.15); ctx.stroke(); }
+  // stars
+  if (st > 1) { ctx.fillStyle = "#ffd166"; ctx.font = `900 ${Math.max(9, r * 0.5)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("★".repeat(st), X, Y + r * 1.12); }
+  ctx.globalAlpha = 1;
+}
+const sparks = [], shots = [], pops = [], rings = [];
+function burst(x, y, color, n, speed) { for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, v = speed * (0.3 + Math.random()); sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.35 + Math.random() * 0.35, color }); } }
+function popAt(text, x, y, color) { pops.push({ text, x, y, color, t0: performance.now() }); }
+/** Effects for what just happened in the fight (positions in arena cells). */
+function fightFx(B, e, teamColors) {
+  const a = B.units[e.a], b = B.units[e.b];
+  if (e.k === "die") { burst(b.x, b.y, teamColors[b.side], 18, 3.2); sound(110, 0.2, 0.12); return; }
+  if (e.k === "heal") { for (let i = 0; i < 5; i++) pops.push({ text: "+", x: b.x + (Math.random() - 0.5) * 0.6, y: b.y, color: "#5dffa0", t0: performance.now() + i * 60, small: true }); return; }
+  if (e.k === "shot") shots.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, t0: performance.now(), ms: 220, color: a.k === "dragon" ? "#ffb347" : a.k === "mage" ? "#c9b8ff" : "#f2e3b0", splash: e.splash });
+  else { burst(b.x, b.y, "#fff", 6, 2); rings.push({ x: b.x, y: b.y, t0: performance.now(), color: e.splash ? "#ffd9a0" : "#ffffffaa", slash: !e.splash }); }
+  popAt(e.crit ? `${e.n}!` : String(e.n), b.x + (Math.random() - 0.5) * 0.3, b.y - 0.35, e.crit ? "#ffd166" : "#ffffffdd");
+  sound(e.k === "shot" ? 700 : 220, 0.03, 0.05);
+}
+function drawEffects(dt, now) {
+  for (let i = shots.length - 1; i >= 0; i--) {
+    const s = shots[i], p = (now - s.t0) / s.ms;
+    if (p >= 1) { shots.splice(i, 1); burst(s.x2, s.y2, s.color, 5, 1.8); if (s.splash) rings.push({ x: s.x2, y: s.y2, t0: now, color: s.color }); continue; }
+    const [X1, Y1] = toScreen(s.x1, s.y1), [X2, Y2] = toScreen(s.x2, s.y2), at = (q) => [X1 + (X2 - X1) * q, Y1 + (Y2 - Y1) * q - Math.sin(q * Math.PI) * CELL * 0.35];
+    const [X, Y] = at(p), [TX, TY] = at(Math.max(0, p - 0.25));
+    ctx.strokeStyle = s.color + "88"; ctx.lineWidth = Math.max(2, CELL * 0.05); ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(TX, TY); ctx.lineTo(X, Y); ctx.stroke();
+    ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(X, Y, Math.max(2.5, CELL * (s.splash ? 0.1 : 0.06)), 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const r = rings[i], a = (now - r.t0) / 380; if (a >= 1) { rings.splice(i, 1); continue; }
+    const [X, Y] = toScreen(r.x, r.y); ctx.globalAlpha = 1 - a; ctx.strokeStyle = r.color; ctx.lineWidth = 3; ctx.beginPath();
+    if (r.slash) ctx.arc(X, Y, CELL * (0.3 + a * 0.15), -2.4 + a * 1.2, -0.6 + a * 1.2); else ctx.arc(X, Y, CELL * (0.2 + a * 0.8), 0, Math.PI * 2);
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const p = sparks[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92;
+    if (p.life <= 0) { sparks.splice(i, 1); continue; }
+    const [X, Y] = toScreen(p.x, p.y), s = Math.max(2, CELL * 0.06); ctx.globalAlpha = Math.min(1, p.life * 3); ctx.fillStyle = p.color; ctx.fillRect(X - s / 2, Y - s / 2, s, s);
+  }
+  ctx.globalAlpha = 1;
+  for (let i = pops.length - 1; i >= 0; i--) {
+    const p = pops[i], a = (now - p.t0) / 800; if (a < 0) continue; if (a >= 1) { pops.splice(i, 1); continue; }
+    const [X, Y] = toScreen(p.x, p.y); ctx.globalAlpha = 1 - a * a; ctx.font = `900 ${Math.max(11, CELL * (p.small ? 0.3 : 0.2))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.lineWidth = 3; ctx.strokeStyle = "#000a"; ctx.strokeText(p.text, X, Y - a * CELL * 0.5); ctx.fillStyle = p.color; ctx.fillText(p.text, X, Y - a * CELL * 0.5); ctx.globalAlpha = 1;
+  }
+}
+/** The fight I watch: my own (or, watching, the first one), replayed from the boards and the seed. */
+let fight = null;
+function fightFor(g) {
+  const key = g.id + ":" + g.round, boards = shared("boards", null);
+  if (fight && fight.key === key) return fight;
+  if (!boards || boards.g !== g.id || boards.r !== g.round) return null;
+  const seat = mySeat(g);
+  let i = g.pairs.findIndex((p) => p[0] === seat || (p[1] === seat && !p[2]));
+  if (i < 0) i = Math.max(0, g.pairs.findIndex((p) => !g.seats[p[0]].b || !g.seats[p[1]].b));
+  const p = g.pairs[i];
+  if (!p) return null;
+  fight = { key, p, B: makeBattle(boards.b[p[0]], boards.b[p[1]], pairSeed(g, i)), flip: p[1] === seat && !p[2], shown: false };
+  sparks.length = shots.length = pops.length = rings.length = 0;
+  return fight;
+}
+function drawFight(g, dt, now) {
+  const F = fightFor(g);
+  if (!F) return;
+  flip = F.flip;
+  const B = F.B, elapsed = (Date.now() - g.startAt) / 1000, team = F.flip ? [TEAM[1], TEAM[0]] : TEAM;
+  let steps = 0;
+  while (!B.done && B.t + TICK <= elapsed) { stepBattle(B); steps++; }
+  for (const e of B.events.splice(0)) if (steps < 6) fightFx(B, e, team); // a late joiner skips the old effects
+  const a = B.done ? 1 : Math.max(0, Math.min(1, (elapsed - B.t) / TICK));
+  const list = B.units.filter((u) => u.hp > 0).map((u) => ({ u, x: u.px + (u.x - u.px) * a, y: u.py + (u.y - u.py) * a })).sort((p, q) => toScreen(p.x, p.y)[1] - toScreen(q.x, q.y)[1]);
+  for (const { u, x, y } of list) {
+    let [X, Y] = toScreen(x, y);
+    const lunge = Math.max(0, 1 - (B.t - u.hitAt) / 0.15), t = B.units[u.tgt];
+    if (lunge > 0 && t && !ranged(u.k)) { const [TX, TY] = toScreen(t.x, t.y), d = Math.hypot(TX - X, TY - Y) || 1; X += ((TX - X) / d) * CELL * 0.18 * lunge; Y += ((TY - Y) / d) * CELL * 0.18 * lunge; }
+    const r = CELL * (u.k === "golem" ? 0.38 : 0.31) * (u.st === 3 ? 1.18 : u.st === 2 ? 1.08 : 1);
+    drawUnit(u.k, u.st, X, Y, r, team[u.side], 1, B.t - u.hurtAt < 0.08 ? 1 : 0, now);
+    const bw = r * 1.8; ctx.fillStyle = "#000a"; ctx.fillRect(X - bw / 2, Y - r * 1.35, bw, 4); ctx.fillStyle = u.side === (F.flip ? 1 : 0) ? "#5dff9a" : "#ff6170"; ctx.fillRect(X - bw / 2, Y - r * 1.35, bw * Math.max(0, u.hp / u.max), 4);
+  }
+  drawEffects(dt, now);
+  // who is fighting whom
+  if (!ATTRACT) {
+    const near = F.flip ? F.p[1] : F.p[0], far = F.flip ? F.p[0] : F.p[1], seat = mySeat(g);
+    ctx.font = "800 13px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = g.seats[far].c; ctx.fillText(`${g.seats[far].n}${F.p[2] && far === F.p[1] ? " (ghost)" : ""}`, AX + 6, AY + 5);
+    ctx.textBaseline = "bottom"; ctx.fillStyle = g.seats[near].c; ctx.fillText(near === seat ? "You" : g.seats[near].n, AX + 6, AY + CELL * 6 - 5);
+  }
+  if (B.done && !F.shown) { F.shown = true; fightOver(g, F); }
+}
+/** My board while shopping, with the cell under a dragged unit lit up. */
+function drawMyBoard(g, now) {
+  flip = false;
+  const cap = boardCap(g.round), used = onBoard(mine);
+  for (let i = 0; i < 8; i++) {
+    const u = mine.bd[i], x = (i % 4) + 0.5, y = 4.5 + Math.floor(i / 4), [X, Y] = toScreen(x, y);
+    if (drag && drag.over && drag.over.w === "bd" && drag.over.i === i) { ctx.fillStyle = "#ffffff30"; ctx.fillRect(X - CELL / 2, Y - CELL / 2, CELL, CELL); }
+    if (u && !(drag && drag.from.w === "bd" && drag.from.i === i)) drawUnit(u[0], u[1], X, Y, CELL * 0.31 * (u[1] === 3 ? 1.18 : u[1] === 2 ? 1.08 : 1), TEAM[0], 1, 0, now);
+  }
+  ctx.font = "800 13px system-ui, sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillStyle = used >= cap ? "#ffd166" : "#ffffffaa";
+  ctx.fillText(`Units ${used}/${cap}`, AX + CELL * 4 - 6, AY + CELL * 4 - 4);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#ffffff55"; ctx.font = `800 ${Math.max(12, CELL * 0.16)}px system-ui, sans-serif`;
+  ctx.fillText(fit("Your next opponent", CELL * 3.8), AX + CELL * 2, AY + CELL * 0.9); ctx.fillText(fit("is picked when the fight starts", CELL * 3.8), AX + CELL * 2, AY + CELL * 1.25);
+}
+/** The bench, the shop cards and the two buttons. */
+function drawPanel(g, now) {
+  if (!UI.panel) return;
+  const shopping = canShop(g), P = UI.panel, sellHere = drag && drag.moved && inside(P, drag.x, drag.y) && !drag.overSlot;
+  ctx.fillStyle = sellHere ? "#5a2a33ee" : "#0d0f1ccc"; rr(P.x, P.y - 4, P.w, P.h + 8, 16); ctx.fill();
+  ctx.font = "700 11px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillStyle = "#ffffff88";
+  ctx.fillText(fit(sellHere ? "Let go to sell" : info || "Bench", P.x + P.w - UI.bench[0].x - 8), UI.bench[0].x, P.y + 2);
+  UI.bench.forEach((s, i) => {
+    rr(s.x, s.y, s.w, s.h, 10); ctx.fillStyle = drag && drag.over && drag.over.w === "bn" && drag.over.i === i ? "#ffffff30" : "#ffffff10"; ctx.fill();
+    const u = mine.bn[i];
+    if (u && !(drag && drag.from.w === "bn" && drag.from.i === i)) drawUnit(u[0], u[1], s.x + s.w / 2, s.y + s.h / 2 - 2, s.w * 0.3, TEAM[0], shopping ? 1 : 0.6, 0, now);
+  });
+  const own = (k) => [...mine.bd, ...mine.bn].filter((u) => u && u[0] === k && u[1] === 1).length;
+  UI.shop.forEach((s, i) => {
+    const k = mine.shop[i];
+    if (!k) { rr(s.x, s.y, s.w, s.h, 10); ctx.strokeStyle = "#ffffff22"; ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]); return; }
+    const C = CONFIG.units[k], can = shopping && mine.gold >= C.cost, pair = own(k) >= 2;
+    rr(s.x, s.y, s.w, s.h, 10); ctx.fillStyle = can ? "#2b3352" : "#22263a"; ctx.fill();
+    ctx.lineWidth = pair ? 3 : 2; ctx.strokeStyle = pair ? "#ffd166" : ["", "#8fa3c0", "#4fd18b", "#c88bff"][C.cost]; ctx.stroke();
+    drawUnit(k, 1, s.x + s.w / 2, s.y + s.h * 0.42, s.w * 0.24, "#ffffff33", can ? 1 : 0.45, 0, now);
+    ctx.fillStyle = can ? "#fff" : "#ffffff77"; ctx.font = `800 ${Math.max(10, s.w * 0.15)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillText(C.name, s.x + s.w / 2, s.y + s.h - 8);
+    ctx.fillStyle = "#f0b429"; ctx.beginPath(); ctx.arc(s.x + 12, s.y + 12, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#3a2800"; ctx.font = "900 11px system-ui, sans-serif"; ctx.textBaseline = "middle"; ctx.fillText(C.cost, s.x + 12, s.y + 12.5);
+    if (pair) { ctx.fillStyle = "#ffd166"; ctx.font = "900 10px system-ui, sans-serif"; ctx.fillText("x3!", s.x + s.w - 13, s.y + 12); }
+  });
+  const btn = (b, label, on, color) => { rr(b.x, b.y, b.w, b.h, 12); ctx.fillStyle = on ? color : "#ffffff14"; ctx.fill(); ctx.fillStyle = on ? "#1a1300" : "#ffffff66"; ctx.font = "800 15px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 1); };
+  btn(UI.reroll, `New shop · ${CONFIG.rerollCost}`, shopping && mine.gold >= CONFIG.rerollCost, "#8fd3ff");
+  btn(UI.fight, g.phase === "over" ? "Game over" : g.phase !== "shop" ? "Fighting…" : pressed ? "Waiting…" : "Fight now", shopping && !pressed, "#ffd166");
+  if (drag && drag.moved) { const u = mine[drag.from.w][drag.from.i]; if (u) drawUnit(u[0], u[1], drag.x, drag.y - 10, CELL * 0.34, TEAM[0], 0.9, 0, now); }
+}
+let actx = null, lastSound = 0; // sounds start after the first tap (browsers require it)
+function sound(freq, len, vol = 0.15) {
+  const now = performance.now();
+  if (!actx || ATTRACT || (len < 0.05 && now - lastSound < 70)) return;
+  lastSound = now;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = "square"; o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(Math.max(40, freq * 0.6), t + len);
+  g.gain.setValueAtTime(vol * 0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + len + 0.05);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + len + 0.08);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const place = (n) => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
+let board = null, resultsFor = -1, dropped = false, chipsKey = "", info = "", hintOff = false, msg = { text: "", sub: "", color: "#fff", until: 0 };
+function toast(text) { msg = { text: "", sub: text, color: "#fff", until: performance.now() + 1400 }; }
+/** The fight I watched is over: say how it went (the host works out the same result). */
+function fightOver(g, F) {
+  const seat = mySeat(g), mySide = F.p[0] === seat ? 0 : F.p[1] === seat && !F.p[2] ? 1 : -1, B = F.B;
+  if (mySide < 0) { msg = { text: B.winner < 0 ? "Draw" : `${g.seats[F.p[B.winner]].n} wins`, sub: "", color: "#fff", until: performance.now() + 2000 }; return; }
+  const stars = B.units.filter((u) => u.hp > 0 && u.side === B.winner).reduce((n, u) => n + u.st, 0);
+  if (B.winner === mySide) { msg = { text: "Victory!", sub: `+${CONFIG.winBonus} gold next round`, color: "#ffd166", until: performance.now() + 2200 }; sound(660, 0.35, 0.3); }
+  else if (B.winner < 0) msg = { text: "Draw", sub: `−${Math.ceil(g.round / 2)} ♥`, color: "#fff", until: performance.now() + 2200 };
+  else { msg = { text: "Defeat", sub: `−${damageFor(g.round, stars)} ♥`, color: "#ff8a8a", until: performance.now() + 2200 }; sound(150, 0.4, 0.25); }
+}
+function hud(g) {
+  const t = Date.now(), seat = mySeat(g), me = g.seats[seat];
+  $("top").style.display = ATTRACT ? "none" : "";
+  $("phase").textContent = g.phase === "over" ? "Game over" : `Round ${g.round} · ${g.phase === "shop" ? (seat >= 0 && me.out ? "watching" : "shop and place") : "fight!"}`;
+  const left = Math.max(0, g.phase === "fight" ? 0 : g.endsAt - t);
+  $("clock").textContent = g.phase === "shop" ? `0:${String(Math.ceil(left / 1000)).padStart(2, "0")}` : "";
+  $("gold").textContent = seat >= 0 ? mine.gold : "–"; $("hp").textContent = seat >= 0 ? Math.max(0, me.hp) : "–";
+  const key = JSON.stringify(g.seats) + seat;
+  if (key !== chipsKey) {
+    chipsKey = key;
+    $("chips").innerHTML = g.seats.map((s, k) => `<span class="${k === seat ? "me" : ""} ${s.out && g.phase !== "over" ? "out" : ""}" style="--c:${s.c}">${esc(k === seat ? "You" : s.n)} <i><b style="width:${Math.max(0, (s.hp / CONFIG.hp) * 100)}%"></b></i>${Math.max(0, s.hp)}</span>`).join("");
+  }
+  // the big message: Fight!, how my fight went, or a short toast
+  const now = performance.now();
+  let text = "", sub = "", color = "#fff";
+  if (g.phase === "fight" && t < g.startAt && !ATTRACT) { text = "Fight!"; color = "#ffd166"; }
+  else if (now < msg.until && !ATTRACT) ({ text, sub, color } = msg);
+  else if (g.phase === "shop" && g.round === 1 && !hintOff && seat >= 0) sub = "Tap a card to buy. Drag units to place them. Three of a kind merge!";
+  else if (g.phase === "shop" && seat >= 0 && me.out) sub = `You're out (${place(me.out)}). Watching until the end`;
+  $("msg").innerHTML = (text ? esc(text) : "") + (sub ? `<small>${esc(sub)}</small>` : ""); $("msg").style.color = color;
+  const n = livePlayers().length;
+  $("net").textContent = ATTRACT ? "" : net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the arena" : ""}`;
+  $("over").hidden = g.phase !== "over" || ATTRACT;
+  if (g.phase === "over") {
+    $("next").textContent = `Next game in ${Math.max(0, Math.ceil((g.endsAt - t) / 1000))}s`;
+    if (resultsFor !== g.id) showResults(g, seat);
+  }
+}
+function showResults(g, seat) {
+  resultsFor = g.id;
+  const won = seat >= 0 && g.winner === seat, w = g.seats[g.winner];
+  $("overTitle").textContent = g.winner === -2 ? "Draw" : won ? "You win!" : seat >= 0 ? `${place(g.seats[seat].out || 2)} place` : `${w ? w.n : "Someone"} wins`;
+  $("overSub").textContent = won ? "Last one standing" : w ? `${w.n} was the last one standing` : "";
+  $("places").innerHTML = g.seats.map((s, k) => ({ s, k })).sort((p, q) => (p.s.out || 99) - (q.s.out || 99)).map(({ s, k }) => `<li>${esc(k === seat ? "You" : s.n)}<span>${place(s.out || 1)}</span></li>`).join("");
+  $("again").hidden = seat < 0; $("again").disabled = false; $("again").textContent = "Play again";
+  if (won) sound(520, 0.5, 0.3);
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => {
+  const g = game(); if (!g || g.phase !== "over") return;
+  if (isHost()) host.again.add(net.sessionId); else net.send("again", { g: g.id });
+  $("again").disabled = true; $("again").textContent = "Waiting for the others…";
+};
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+// Tap a shop card to buy. Drag a unit to a board cell or bench slot (swaps), or onto the shop to sell.
+let drag = null;
+function spotAt(x, y) {
+  const b = UI.bench.findIndex((s) => inside(s, x, y));
+  if (b >= 0) return { w: "bn", i: b };
+  const cx = Math.floor((x - AX) / CELL), cy = Math.floor((y - AY) / CELL);
+  if (cx >= 0 && cx < 4 && cy >= 4 && cy < 6) return { w: "bd", i: (cy - 4) * 4 + cx };
+  return null;
+}
+function describe(u) { const C = CONFIG.units[u[0]]; return `${C.name} ${"★".repeat(u[1])} · ${Math.round(C.hp * STARS[u[1]])} HP · ${Math.round(C.atk * STARS[u[1]])} dmg · ${C.what}`; }
+/** Trim text to fit a width, with an ellipsis. */
+function fit(text, w) { if (ctx.measureText(text).width <= w) return text; while (text.length > 1 && ctx.measureText(text + "…").width > w) text = text.slice(0, -1); return text + "…"; }
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (!actx) try { actx = new AudioContext(); } catch {}
+  const g = game(), x = e.clientX, y = e.clientY;
+  if (!g || ATTRACT) return;
+  const card = UI.shop.findIndex((s) => inside(s, x, y));
+  if (card >= 0) { if (mine.shop[card]) info = describe([mine.shop[card], 1]); return buy(card); }
+  if (inside(UI.reroll, x, y)) return reroll();
+  if (inside(UI.fight, x, y)) return fightNow();
+  const spot = spotAt(x, y);
+  if (spot && g.phase === "shop" && mine[spot.w][spot.i]) { drag = { from: spot, x, y, sx: x, sy: y, moved: false, over: null }; info = describe(mine[spot.w][spot.i]); cv.setPointerCapture(e.pointerId); }
+});
+cv.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  drag.x = e.clientX; drag.y = e.clientY;
+  if (Math.hypot(drag.x - drag.sx, drag.y - drag.sy) > 8) drag.moved = true;
+  drag.over = spotAt(drag.x, drag.y); drag.overSlot = drag.over && drag.over.w === "bn";
+});
+cv.addEventListener("pointerup", (e) => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (!d.moved) return;
+  const to = spotAt(e.clientX, e.clientY);
+  if (to) moveUnit(d.from, to); else if (inside(UI.panel, e.clientX, e.clientY)) sell(d.from.w, d.from.i);
+});
+cv.addEventListener("pointercancel", () => { drag = null; });
+addEventListener("keydown", (e) => { if (e.key === "r" || e.key === "R") reroll(); if (e.key === " " || e.key === "Enter") fightNow(); const i = "12345".indexOf(e.key); if (i >= 0) buy(i); });
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let myName = "", myColor = COLORS[0], last = performance.now(), lastHb = 0, lastHud = 0, seenGame = -1;
+try { myName = localStorage.getItem("mpa-name") || ""; } catch {}
+if (!myName) { myName = pick(NAME_A) + " " + pick(NAME_B); try { localStorage.setItem("mpa-name", myName); } catch {} }
+if (ATTRACT) Object.assign(CONFIG, { seats: 6, startGold: 34, boardBase: 6, shopMs: 400, fightDelayMs: 300, afterFightMs: 1200, resultsMs: 2000 });
+/** Two players picked the same color at once (the room can look empty as you join): the later sessionId picks again. */
+function fixColor() {
+  const g = game(), others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId), bots = g ? g.seats.filter((s) => s.b).map((s) => s.c) : [];
+  if (!others.some(([id, p]) => id < net.sessionId && p.c === myColor) && !bots.includes(myColor)) return;
+  const used = new Set([...others.map(([, p]) => p.c), ...bots]), free = COLORS.find((c) => !used.has(c));
+  if (free && free !== myColor) { myColor = free; net.me.set("c", myColor); }
+}
+
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); for (const id of Object.keys(S.entities.players || {})) armyOf(id); }
+  if (isHost()) hostTick(); else { host.wasHost = false; host.last = null; }
+  const g = game();
+  layout();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#171a2b"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (g) {
+    if (seenGame !== g.id) { seenGame = g.id; fight = null; pressed = false; hintOff = false; }
+    syncMine(g);
+    const seat = mySeat(g);
+    if (g.phase === "shop" && seat >= 0) { fight = null; drawArena(g, now); drawMyBoard(g, now); }
+    else { drawArena(g, now); drawFight(g, dt, now); }
+    if (!ATTRACT) drawPanel(g, now);
+    if (now - lastHud > 100) { lastHud = now; hud(g); }
+  }
+  requestAnimationFrame(frame);
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("ready", (d, from) => { const g = game(); if (isHost() && g && d && d.g === g.id && d.r === g.round) host.ready.add(from); });
+  net.on("again", (d, from) => { const g = game(); if (isHost() && g && d && d.g === g.id) host.again.add(from); });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  myColor = COLORS.find((c) => !taken.has(c)) || pick(COLORS);
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
