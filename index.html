@@ -829,6 +829,7 @@ function fixColor() {
 }
 
 function frame(now) {
+  requestAnimationFrame(frame);
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
   if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); for (const id of Object.keys(S.entities.players || {})) armyOf(id); }
   if (isHost()) hostTick(); else { host.wasHost = false; host.last = null; }
@@ -845,7 +846,6 @@ function frame(now) {
     if (!ATTRACT) drawPanel(g, now);
     if (now - lastHud > 100) { lastHud = now; hud(g); }
   }
-  requestAnimationFrame(frame);
 }
 
 (async function start() {
