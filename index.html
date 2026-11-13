@@ -26,6 +26,7 @@
   .box h2 { margin: 0 0 4px; font-size: 26px; } .box p { margin: 0 0 12px; opacity: .85; }
   .box h3 { margin: 6px 0 4px; font-size: 13px; color: #ffd166; text-align: left; }
   .box ol { text-align: left; margin: 0 0 12px; padding-left: 24px; font-size: 14px; min-height: 30px; } .box li span { float: right; }
+  .box li.note { list-style: none; margin-left: -24px; opacity: .8; } /* a status line, not a numbered entry */
   .box button { width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffd166; color: #2a1d00; font: 800 16px system-ui, sans-serif; cursor: pointer; }
   .box small { display: block; margin-top: 8px; opacity: .6; font-size: 12px; }
   #safe { position: fixed; bottom: 0; height: 0; padding-bottom: env(safe-area-inset-bottom); visibility: hidden; }
@@ -40,7 +41,7 @@
 <div id="over" hidden><div class="box">
   <h2 id="overTitle"></h2><p id="overSub"></p>
   <h3>This game</h3><ol id="places"></ol>
-  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most wins</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button id="again">Play again</button><small id="next"></small>
 </div></div>
 <div id="safe"></div>
@@ -757,16 +758,17 @@ function showResults(g, seat) {
   resultsFor = g.id;
   const won = seat >= 0 && g.winner === seat, w = g.seats[g.winner];
   $("overTitle").textContent = g.winner === -2 ? "Draw" : won ? "You win!" : seat >= 0 ? `${place(g.seats[seat].out || 2)} place` : `${w ? w.n : "Someone"} wins`;
-  $("overSub").textContent = won ? "Last one standing" : w ? `${w.n} was the last one standing` : "";
+  const standing = g.seats.filter((s) => s.hp > 0).length; // more than one: the game ended because every player was out
+  $("overSub").textContent = standing > 1 ? (w ? `${won ? "You" : w.n} had the most health left` : "") : won ? "Last one standing" : w ? `${w.n} was the last one standing` : "";
   $("places").innerHTML = g.seats.map((s, k) => ({ s, k })).sort((p, q) => (p.s.out || 99) - (q.s.out || 99)).map(({ s, k }) => `<li>${esc(k === seat ? "You" : s.n)}<span>${place(s.out || 1)}</span></li>`).join("");
   $("again").hidden = seat < 0; $("again").disabled = false; $("again").textContent = "Play again";
   if (won) sound(520, 0.5, 0.3);
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = "<li class='note'>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li class='note'>Loading…</li>";
   (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li class='note'>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class='note'>Couldn't load the leaderboard.</li>"; });
 }
 $("again").onclick = () => {
   const g = game(); if (!g || g.phase !== "over") return;
@@ -787,8 +789,10 @@ function spotAt(x, y) {
 function describe(u) { const C = CONFIG.units[u[0]]; return `${C.name} ${"★".repeat(u[1])} · ${Math.round(C.hp * STARS[u[1]])} HP · ${Math.round(C.atk * STARS[u[1]])} dmg · ${C.what}`; }
 /** Trim text to fit a width, with an ellipsis. */
 function fit(text, w) { if (ctx.measureText(text).width <= w) return text; while (text.length > 1 && ctx.measureText(text + "…").width > w) text = text.slice(0, -1); return text + "…"; }
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener("pointerdown", (e) => {
   e.preventDefault();
+  if (e.pointerType === "mouse" && e.button !== 0) return; // only the left button buys and drags
   if (!actx) try { actx = new AudioContext(); } catch {}
   const g = game(), x = e.clientX, y = e.clientY;
   if (!g || ATTRACT) return;
@@ -813,7 +817,7 @@ cv.addEventListener("pointerup", (e) => {
   if (to) moveUnit(d.from, to); else if (inside(UI.panel, e.clientX, e.clientY)) sell(d.from.w, d.from.i);
 });
 cv.addEventListener("pointercancel", () => { drag = null; });
-addEventListener("keydown", (e) => { if (e.key === "r" || e.key === "R") reroll(); if (e.key === " " || e.key === "Enter") fightNow(); const i = "12345".indexOf(e.key); if (i >= 0) buy(i); });
+addEventListener("keydown", (e) => { if (e.key === "r" || e.key === "R") reroll(); if (e.key === " " || e.key === "Enter") fightNow(); const i = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5"].indexOf(e.code); if (i >= 0) buy(i); }); // e.code: Shift+1 still buys card 1
 document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
 
 // ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
